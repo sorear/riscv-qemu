@@ -709,10 +709,10 @@ inline void csr_write_helper(CPURISCVState *env, target_ulong val_to_write,
         break;
     }
     case CSR_MUCOUNTEREN:
-        env->csr[CSR_MUCOUNTEREN] = val_to_write & 7;
+        env->csr[CSR_MUCOUNTEREN] = val_to_write;
         break;
     case CSR_MSCOUNTEREN:
-        env->csr[CSR_MSCOUNTEREN] = val_to_write & 7;
+        env->csr[CSR_MSCOUNTEREN] = val_to_write;
         break;
     case CSR_SSTATUS: {
         target_ulong ms = env->csr[CSR_MSTATUS];
@@ -768,6 +768,10 @@ inline void csr_write_helper(CPURISCVState *env, target_ulong val_to_write,
     case CSR_MBADADDR:
         env->csr[CSR_MBADADDR] = val_to_write;
         break;
+    case CSR_MCYCLE:
+    case CSR_MINSTRET:
+        env->csr[CSR_MINSTRET] = val_to_write - cpu_riscv_read_instret(env);
+        break;
     case CSR_DCSR:
         printf("DEBUG NOT SUPPORTED\n");
         exit(1);
@@ -779,6 +783,9 @@ inline void csr_write_helper(CPURISCVState *env, target_ulong val_to_write,
     case CSR_DSCRATCH:
         printf("DEBUG NOT SUPPORTED\n");
         exit(1);
+        break;
+    default:
+        printf("unimplemented csr w%ld\n", csrno);
         break;
     }
 }
@@ -795,6 +802,23 @@ inline target_ulong csr_read_helper(CPURISCVState *env, target_ulong csrno)
     fprintf(stderr, "READ CSR 0x%x\n", csrno2);
     #endif
 
+    target_ulong ctr_en = env->priv == PRV_U ? env->csr[CSR_MUCOUNTEREN] :
+        env->priv == PRV_S ? env->csr[CSR_MSCOUNTEREN] : -1U;
+    bool ctr_ok = (ctr_en >> (csrno & 31)) & 1;
+
+    if (ctr_ok) {
+        if (csrno >= CSR_HPMCOUNTER3 && csrno <= CSR_HPMCOUNTER31)
+            return 0;
+        // if (xlen == 32 && which >= CSR_HPMCOUNTER3H && which <= CSR_HPMCOUNTER31H)
+        //     return 0;
+    }
+    if (csrno >= CSR_MHPMCOUNTER3 && csrno <= CSR_MHPMCOUNTER31)
+        return 0;
+//    if (xlen == 32 && which >= CSR_MHPMCOUNTER3 && which <= CSR_MHPMCOUNTER31)
+//        return 0;
+    if (csrno >= CSR_MHPMEVENT3 && csrno <= CSR_MHPMEVENT31)
+        return 0;
+
     switch (csrno2)
     {
     case CSR_FFLAGS:
@@ -804,60 +828,20 @@ inline target_ulong csr_read_helper(CPURISCVState *env, target_ulong csrno)
     case CSR_FCSR:
         return (env->csr[CSR_FFLAGS] << FSR_AEXC_SHIFT) |
             (env->csr[CSR_FRM] << FSR_RD_SHIFT);
-    case CSR_TIME:
-    case CSR_INSTRET:
-    case CSR_CYCLE:
-        if ((env->csr[CSR_MUCOUNTEREN] >> (csrno2 & (63))) & 1) {
-            return csr_read_helper(env, csrno2 + (CSR_MCYCLE - CSR_CYCLE));
-        }
-        break;
-    case CSR_STIME:
-    case CSR_SINSTRET:
-    case CSR_SCYCLE:
-        if ((env->csr[CSR_MSCOUNTEREN] >> (csrno2 & (63))) & 1) {
-            return csr_read_helper(env, csrno2 + (CSR_MCYCLE - CSR_SCYCLE));
-        }
-        break;
     case CSR_MUCOUNTEREN:
         return env->csr[CSR_MUCOUNTEREN];
     case CSR_MSCOUNTEREN:
         return env->csr[CSR_MSCOUNTEREN];
-    case CSR_MUCYCLE_DELTA: 
-        return 0; // as spike does
-    case CSR_MUTIME_DELTA:  
-        return 0; // as spike does
-    case CSR_MUINSTRET_DELTA:  
-        return 0; // as spike does
-    case CSR_MSCYCLE_DELTA:  
-        return 0; // as spike does
-    case CSR_MSTIME_DELTA:  
-        return 0; // as spike does
-    case CSR_MSINSTRET_DELTA:  
-        return 0; // as spike does
-    case CSR_MUCYCLE_DELTAH:  
-        printf("CSR 0x%x unsupported on RV64\n", csrno2);
-        exit(1);
-    case CSR_MUTIME_DELTAH:  
-        printf("CSR 0x%x unsupported on RV64\n", csrno2);
-        exit(1);
-    case CSR_MUINSTRET_DELTAH:  
-        printf("CSR 0x%x unsupported on RV64\n", csrno2);
-        exit(1);
-    case CSR_MSCYCLE_DELTAH:  
-        printf("CSR 0x%x unsupported on RV64\n", csrno2);
-        exit(1);
-    case CSR_MSTIME_DELTAH:  
-        printf("CSR 0x%x unsupported on RV64\n", csrno2);
-        exit(1);
-    case CSR_MSINSTRET_DELTAH:  
-        printf("CSR 0x%x unsupported on RV64\n", csrno2);
-        exit(1);
     // notice the lack of CSR_MTIME - this is handled by throwing an exception
     // and letting the handler read from the RTC
+    case CSR_INSTRET:
+    case CSR_CYCLE:
     case CSR_MCYCLE:  
-        return cpu_riscv_read_instret(env);
-    case CSR_MINSTRET:  
-        return cpu_riscv_read_instret(env);
+    case CSR_MINSTRET:
+        if (ctr_ok) {
+            return cpu_riscv_read_instret(env) + env->csr[CSR_MCYCLE];
+        }
+        break;
     case CSR_MCYCLEH:  
         printf("CSR 0x%x unsupported on RV64\n", csrno2);
         exit(1);
@@ -920,8 +904,6 @@ inline target_ulong csr_read_helper(CPURISCVState *env, target_ulong csrno)
         return env->csr[CSR_MEDELEG];
     case CSR_MIDELEG:
         return env->csr[CSR_MIDELEG];
-    case CSR_TDRSELECT:
-        return 0; // as spike does
     case CSR_DCSR:
         printf("DEBUG NOT IMPLEMENTED\n");
         exit(1);
@@ -931,6 +913,11 @@ inline target_ulong csr_read_helper(CPURISCVState *env, target_ulong csrno)
     case CSR_DSCRATCH:
         printf("DEBUG NOT IMPLEMENTED\n");
         exit(1);
+    default:
+        printf("unimplemented csr %ld\n", csrno);
+        break;
+    case CSR_TIME:
+        break;
     }
     // used by e.g. MTIME read
     helper_raise_exception(env, RISCV_EXCP_ILLEGAL_INST);
