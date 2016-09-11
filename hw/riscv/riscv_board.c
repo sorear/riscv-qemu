@@ -47,8 +47,6 @@
 #include "hw/i386/pc.h"
 #include "hw/char/serial.h"
 #include "hw/riscv/riscv_softint.h"
-#include "hw/riscv/htif/htif.h"
-#include "hw/riscv/htif/frontend.h"
 #include "hw/riscv/riscv_rtc.h"
 #include "hw/block/fdc.h"
 #include "net/net.h"
@@ -133,9 +131,6 @@ static void riscv_board_init(MachineState *args)
     RISCVCPU *cpu;
     CPURISCVState *env;
     int i;
-
-    DriveInfo *htifbd_drive;
-    const char *htifbd_fname; // htif block device filename
 
     DeviceState *dev = qdev_create(NULL, TYPE_RISCV_BOARD);
 
@@ -231,8 +226,8 @@ static void riscv_board_init(MachineState *args)
         "  0 {\n"
         "    addr 0x" "80000000" ";\n"
         "    size 0x";
-   
-   
+
+
     // part two of config string - after memory size specified 
     const char * config_string2 =  ";\n"
         "  };\n"
@@ -267,27 +262,6 @@ static void riscv_board_init(MachineState *args)
     for (q = 0; q < confstrlen; q++) {
         stb_p(memory_region_get_ram_ptr(main_mem)+reset_vec[3]+q, config_string[q]);
     }
-
-    // add serial device 0x3f8-0x3ff
-    // serial_mm_init(system_memory, 0xF0000400, 0, env->irq[5], 1843200/16,
-    //         serial_hds[0], DEVICE_NATIVE_ENDIAN);
-
-    // setup HTIF Block Device if one is specified as -hda FILENAME
-    // NOTE: this is no longer supported by riscv-linux
-    htifbd_drive = drive_get_by_index(IF_IDE, 0);
-    if (NULL == htifbd_drive) {
-        htifbd_fname = NULL;
-    } else {
-        htifbd_fname = blk_bs(blk_by_legacy_dinfo(htifbd_drive))->filename;
-        // get rid of orphaned drive warning, until htif uses the real blockdev
-        htifbd_drive->is_default = true;
-    }
-
-    // add memory mapped htif registers at location specified in the symbol
-    // table of the elf being loaded (thus kernel_filename is passed to the 
-    // init rather than an address)
-    htif_mm_init(system_memory, kernel_filename, env->irq[4], main_mem,
-            htifbd_fname, kernel_cmdline, env, serial_hds[0]);
 
     sysbus_create_varargs("riscv.sifive-uart", 0x40002000, NULL);
 
