@@ -203,8 +203,29 @@ static void riscv_board_init(MachineState *args)
         "  vendor ucb;\n"
         "  arch spike;\n"
         "};\n"
+        "plic { \n"
+        "  interface \"plic\"; \n"
+        "  ndevs 2; \n"
+        "  priority { mem { 0x60000000 0x60000fff; }; }; \n"
+        "  pending  { mem { 0x60001000 0x6000107f; }; }; \n"
+        "  0 { \n"
+        "    0 { \n"
+        "      m { \n"
+        "        ie  { mem { 0x60002000 0x6000207f; }; }; \n"
+        "        ctl { mem { 0x60200000 0x60200007; }; }; \n"
+        "      }; \n"
+        "      s { \n"
+        "        ie  { mem { 0x60002080 0x600020ff; }; }; \n"
+        "        ctl { mem { 0x60201000 0x60201007; }; }; \n"
+        "      }; \n"
+        "    }; \n"
+        "  }; \n"
+        "}; \n"
         "rtc {\n"
         "  addr 0x" "40000000" ";\n"
+        "};\n"
+        "uart {\n"
+        "  addr 0x40002000;\n"
         "};\n"
         "ram {\n"
         "  0 {\n"
@@ -267,6 +288,8 @@ static void riscv_board_init(MachineState *args)
     // init rather than an address)
     htif_mm_init(system_memory, kernel_filename, env->irq[4], main_mem,
             htifbd_fname, kernel_cmdline, env, serial_hds[0]);
+
+    sysbus_create_varargs("riscv.sifive-uart", 0x40002000, NULL);
 
     // timer device at 0x40000000, as specified in the config string above
     timer_mm_init(system_memory, 0x40000000, env);
