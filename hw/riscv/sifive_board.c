@@ -56,34 +56,6 @@ typedef struct {
     SysBusDevice parent_obj;
 } BoardState;
 
-static struct _loaderparams {
-    int ram_size;
-    const char *kernel_filename;
-    const char *kernel_cmdline;
-    const char *initrd_filename;
-} loaderparams;
-
-static uint64_t identity_translate(void *opaque, uint64_t addr)
-{
-    return addr;
-}
-
-static int64_t load_kernel(void)
-{
-    int64_t kernel_entry, kernel_high;
-    int big_endian;
-    big_endian = 0;
-
-    if (load_elf(loaderparams.kernel_filename, identity_translate, NULL,
-                 (uint64_t *)&kernel_entry, NULL, (uint64_t *)&kernel_high,
-                 big_endian, ELF_MACHINE, 1, 0) < 0) {
-        fprintf(stderr, "qemu: could not load kernel '%s'\n",
-                loaderparams.kernel_filename);
-        exit(1);
-    }
-    return kernel_entry;
-}
-
 static void main_cpu_reset(void *opaque)
 {
     RISCVCPU *cpu = opaque;
@@ -94,11 +66,9 @@ static void riscv_sifive_board_init(MachineState *args)
 {
     ram_addr_t ram_size = args->ram_size;
     const char *cpu_model = args->cpu_model;
-    const char *kernel_filename = args->kernel_filename;
-    const char *kernel_cmdline = args->kernel_cmdline;
-    const char *initrd_filename = args->initrd_filename;
     MemoryRegion *system_memory = get_system_memory();
-    MemoryRegion *main_mem = g_new(MemoryRegion, 1);
+    MemoryRegion *main_mem;
+    MemoryRegion *boot_rom;
     RISCVCPU *cpu;
     CPURISCVState *env;
     int i;
@@ -136,29 +106,24 @@ static void riscv_sifive_board_init(MachineState *args)
     env = &cpu->env;
 
     /* register system main memory (actual RAM) */
-    memory_region_init_ram(main_mem, NULL, "riscv_sifive_board.ram", 2147483648L +
-                           ram_size, &error_fatal);
-    /* for phys mem size check in page table walk */
-    env->memsize = ram_size;
+    hwaddr dram_base = 0x80000000;
+
+    main_mem = g_new(MemoryRegion, 1);
+    memory_region_init_ram(main_mem, NULL, "riscv_sifive_board.ram", ram_size, &error_fatal);
     vmstate_register_ram_global(main_mem);
-    memory_region_add_subregion(system_memory, 0x0, main_mem);
+    memory_region_add_subregion(system_memory, dram_base, main_mem);
 
-    if (kernel_filename) {
-        loaderparams.ram_size = ram_size;
-        loaderparams.kernel_filename = kernel_filename;
-        loaderparams.kernel_cmdline = kernel_cmdline;
-        loaderparams.initrd_filename = initrd_filename;
-        load_kernel();
-    }
+    /* TODO placeholders for MMIO devices */
+    MemoryRegion *plic_placeholder = g_new(MemoryRegion, 1);
+    memory_region_init_ram(plic_placeholder, NULL, "riscv_sifive_board.plic", 0x400000, &error_fatal);
+    memory_region_add_subregion(system_memory, 0x60000000, plic_placeholder);
 
-    uint32_t reset_vec[8] = {
-        0x297 + 0x80000000 - 0x1000, /* reset vector */
-        0x00028067,                  /* jump to DRAM_BASE */
-        0x00000000,                  /* reserved */
-        0x0,                         /* config string pointer */
-        0, 0, 0, 0                   /* trap vector */
-    };
-    reset_vec[3] = 0x1000 + sizeof(reset_vec); /* config string pointer */
+    /* TODO placeholders for MMIO devices */
+    MemoryRegion *ipi_placeholder = g_new(MemoryRegion, 1);
+    memory_region_init_ram(ipi_placeholder, NULL, "riscv_sifive_board.ipi", 0x4, &error_fatal);
+    memory_region_add_subregion(system_memory, 0x40001000, ipi_placeholder);
+
+    /* Generate config string */
 
     /* part one of config string - before memory size specified */
     const char *config_string1 = "platform {\n"
@@ -220,19 +185,32 @@ static void riscv_sifive_board_init(MachineState *args)
     strcat(config_string, config_string1);
     strcat(config_string, ramsize_as_hex_str);
     strcat(config_string, config_string2);
+    size_t config_size = strlen(config_string)+1;
 
-    /* copy in the reset vec and configstring */
-    int q;
-    for (q = 0; q < sizeof(reset_vec) / sizeof(reset_vec[0]); q++) {
-        stl_p(memory_region_get_ram_ptr(main_mem) + 0x1000 + q * 4,
-              reset_vec[q]);
+    /* ROM setup */
+
+    if (bios_name == NULL) {
+        error_report("BBL carrier binary must be passed as -bios");
+        exit(1);
     }
 
-    int confstrlen = strlen(config_string);
-    for (q = 0; q < confstrlen; q++) {
-        stb_p(memory_region_get_ram_ptr(main_mem) + reset_vec[3] + q,
-              config_string[q]);
+    if (load_image_targphys(bios_name, dram_base, ram_size) < 0) {
+        error_report("Could not load boot image '%s'", bios_name);
+        exit(1);
     }
+
+    char reset_vec[16] = {
+        "\xb7\x00\x00\x40" /* lui ra, 0x40000 */
+        "\x93\x90\x10\x00" /* slli ra, ra, 1 */
+        "\x67\x80\x00\x00" /* ret */
+        "\x10\x10\x00\x00" /* config string ptr = 0x1010 = just after this */
+    };
+
+    boot_rom = g_new(MemoryRegion, 1);
+    memory_region_init_rom(boot_rom, NULL, "riscv_sifive_board.boot_rom", ROUND_UP(config_size + sizeof(reset_vec), TARGET_PAGE_SIZE), &error_fatal);
+    memory_region_add_subregion(system_memory, 0x1000, boot_rom);
+    cpu_physical_memory_write_rom(&address_space_memory, 0x1000, (uint8_t*)reset_vec, sizeof(reset_vec));
+    cpu_physical_memory_write_rom(&address_space_memory, 0x1000+sizeof(reset_vec), (uint8_t*)config_string, config_size);
 
     sifive_uart_create(0x40002000, serial_hds[0]);
 

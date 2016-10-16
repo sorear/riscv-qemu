@@ -135,13 +135,6 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
         /* check that physical address of PTE is legal */
         target_ulong pte_addr = base + idx * ptesize;
 
-        /* PTE must reside in memory */
-        if (!(pte_addr >= DRAM_BASE && pte_addr < (DRAM_BASE + env->memsize))) {
-            printf("PTE was not in DRAM region\n");
-            exit(1);
-            break;
-        }
-
         target_ulong pte = ldq_phys(cs->as, pte_addr);
         target_ulong ppn = pte >> PTE_PPN_SHIFT;
 

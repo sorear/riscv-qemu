@@ -144,7 +144,7 @@ make -j4
 
 To boot Linux (assuming you are in the `riscv-qemu` directory):
 
-    $ ./riscv64-softmmu/qemu-system-riscv64 -kernel freedom-u-sdk/work/riscv-pk/bbl -nographic -machine sifive
+    $ ./riscv64-softmmu/qemu-system-riscv64 -kernel freedom-u-sdk/work/bbl.bin -nographic -machine sifive
 
 Notes about arguments:
 * `-kernel bblvmlinuxinitramfs_dynamic`: This is the path to the binary to run. In this case, it contains the bbl bootloader, vmlinux, and an initramfs containing busybox.
